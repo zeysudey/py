@@ -1,8 +1,12 @@
 import sys
 import cv2
-from PySide6.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QSizePolicy
-from PySide6.QtGui import QPainter, QPen, QFont, QImage, QPixmap
-from PySide6.QtCore import Qt, QRect, QTimer
+import atexit
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton,
+    QVBoxLayout, QHBoxLayout, QSizePolicy
+)
+from PySide6.QtGui import QPainter, QPen, QImage, QPixmap
+from PySide6.QtCore import Qt, QTimer
 
 
 class CrosshairLabel(QLabel):
@@ -19,50 +23,19 @@ class CrosshairLabel(QLabel):
     def paintEvent(self, event):
         super().paintEvent(event)
         painter = QPainter(self)
-
-        # Arka plan temizleme
         painter.fillRect(self.rect(), Qt.lightGray)
 
-        # Kamera görüntüsü varsa çiz
         if self.frame is not None:
             rgb_image = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qimg = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
             pixmap = QPixmap.fromImage(qimg).scaled(self.size(), Qt.IgnoreAspectRatio, Qt.FastTransformation)
             painter.drawPixmap(0, 0, pixmap)
 
-        # Siyah çerçeve
         pen = QPen(Qt.black, 8)
         painter.setPen(pen)
         painter.drawRect(0, 0, self.width(), self.height())
-
-        # Nişangâh çizimi
-        painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(Qt.black, max(3, self.width() // 150))
-        painter.setPen(pen)
-
-        center_x = self.width() // 2
-        center_y = self.height() // 2
-        radius = max(3, self.width() // 180)
-        line_length = self.width() // 14
-        gap = self.width() // 40
-
-        painter.drawLine(center_x, center_y - line_length, center_x, center_y - gap)
-        painter.drawLine(center_x, center_y + gap, center_x, center_y + line_length)
-        painter.drawLine(center_x - line_length, center_y, center_x - gap, center_y)
-        painter.drawLine(center_x + gap, center_y, center_x + line_length, center_y)
-
-        painter.setBrush(Qt.black)
-        painter.drawEllipse(QRect(center_x - radius, center_y - radius, radius * 2, radius * 2))
-
-        painter.setPen(QPen(Qt.red, 2))
-        font = QFont()
-        font.setPointSize(max(8, self.width() // 60))
-        painter.setFont(font)
-        text_width = painter.fontMetrics().horizontalAdvance("kamera görüntüsü")
-        painter.drawText(center_x - text_width // 2, center_y - line_length - 20, "kamera görüntüsü")
 
 
 class TurretControlUI(QWidget):
@@ -70,18 +43,36 @@ class TurretControlUI(QWidget):
         super().__init__()
         self.setWindowTitle("Turret Control Panel")
         self.setMinimumSize(1300, 750)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet("background-color: #D3D3D3; border: 10px solid black;")
 
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
+        self.cap = None  # Kamera sonra başlatılacak
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_camera_frame)
-        self.timer.start(50)
 
         self.initUI()
+
+        QTimer.singleShot(100, self.start_camera)
+
+        # Programdan çıkarken kamera düzgün kapansın
+        atexit.register(self.cleanup_camera)
+
+    def start_camera(self):
+        if self.cap and self.cap.isOpened():
+            return  # Zaten açık
+
+        self.cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)  # veya cv2.CAP_MSMF
+        if not self.cap.isOpened():
+            print(" USB kamera (index 1) açılamadı.")
+            return
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+
+        self.timer.start(33)  # 30 FPS
+
+    def cleanup_camera(self):
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            print("Kamera düzgün kapatıldı (atexit).")
 
     def initUI(self):
         main_layout = QHBoxLayout()
@@ -152,24 +143,22 @@ class TurretControlUI(QWidget):
         main_layout.addLayout(left_layout)
         main_layout.addLayout(center_layout, stretch=2)
         main_layout.addLayout(right_layout)
-
         self.setLayout(main_layout)
 
     def update_camera_frame(self):
-        ret, frame = self.cap.read()
-        if ret:
-            self.camera_label.set_frame(frame)
+        if self.cap and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if ret:
+                self.camera_label.set_frame(frame)
 
     def closeEvent(self, event):
-        self.cap.release()
+        self.cleanup_camera()
         event.accept()
 
     def create_button_with_label(self, text, bg_color="lightgray", text_color="black"):
         button = QPushButton()
         button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         button.setFixedSize(90, 90)
-
-        # Terminale tıklama mesajı
         button.clicked.connect(lambda: print(f"{text} butonuna basıldı."))
 
         button.setStyleSheet(f"""
