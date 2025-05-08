@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPainter, QPen, QImage, QPixmap
 from PySide6.QtCore import Qt, QTimer
+from bno055 import CubeWidget
+import serial
 
 
 class CrosshairLabel(QLabel):
@@ -52,6 +54,15 @@ class TurretControlUI(QWidget):
         self.initUI()
 
         QTimer.singleShot(100, self.start_camera)
+        try:
+            self.bno_serial = serial.Serial("COM8", 9600, timeout=1)
+            self.bno_timer = QTimer(self)
+            self.bno_timer.timeout.connect(self.read_bno_data)
+            self.bno_timer.start(30)
+        except serial.SerialException as e:
+            print(f"BNO055 bağlanamadı: {e}")
+        self.bno_serial = None
+
 
         # Programdan çıkarken kamera düzgün kapansın
         atexit.register(self.cleanup_camera)
@@ -94,6 +105,13 @@ class TurretControlUI(QWidget):
         center_layout.addWidget(self.camera_label, stretch=2)
 
         right_layout = QVBoxLayout()
+        #  3D Model 
+        self.cube_widget = CubeWidget()
+        self.cube_widget.setFixedSize(250, 250) #boyusu
+        self.cube_widget.setStyleSheet("border: 15px solid black; border-radius: 10px;")
+        right_layout.addWidget(self.cube_widget, alignment=Qt.AlignHCenter)
+
+        right_layout.addSpacing(20) 
         self.emergency_button_right = QPushButton("EMERGENCY\nSTOP")
         self.emergency_button_right.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.emergency_button_right.setFixedSize(110, 110)
@@ -207,6 +225,18 @@ class TurretControlUI(QWidget):
         container.setLayout(layout)
         container.setStyleSheet("border: none;")
         return container
+    def read_bno_data(self):
+        while self.bno_serial.in_waiting:
+            line = self.bno_serial.readline().decode(errors="ignore").strip()
+            if line.startswith("ROLL="):
+                try:
+                    parts = line.split(",")
+                    r = float(parts[0].split("=")[1])
+                    p = float(parts[1].split("=")[1])
+                    y = float(parts[2].split("=")[1])
+                    self.cube_widget.update_orientation(r, p, y)
+                except Exception as e:
+                    print("Veri çözümleme hatası:", e)
 
 
 if __name__ == "__main__":
